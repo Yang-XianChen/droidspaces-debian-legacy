@@ -1,0 +1,143 @@
+name: Build legacy-kernel Debian rootfs
+
+# Builds Droidspaces rootfs tarballs for legacy Android kernels (3.10 - 4.19,
+# including 4.9) on GitHub's native arm64 runners -- no QEMU emulation, so a
+# full Debian rootfs builds in a couple of minutes instead of half an hour.
+#
+# One release per run, plus a regenerated rootfs.json that the Droidspaces
+# Android app can subscribe to:
+#   https://raw.githubusercontent.com/<owner>/<repo>/main/rootfs.json
+
+on:
+  workflow_dispatch:
+    inputs:
+      build:
+        description: "Build the rootfs as well (off = only regenerate rootfs.json)"
+        type: boolean
+        default: true
+  push:
+    branches: [main]
+    paths:
+      - "templates/**"
+      - "scripts/**"
+      - "build.sh"
+      - ".github/workflows/build-rootfs.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-rootfs-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - id: version
+        run: echo "version=v$(date -u +%Y%m%d)-${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: prepare
+    if: github.event_name != 'workflow_dispatch' || inputs.build
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Debian-12-bookworm-Minimal-Kernel-4.9
+            arch: aarch64
+            runner: ubuntu-24.04-arm
+          - name: Debian-11-bullseye-Minimal-Kernel-4.9
+            arch: aarch64
+            runner: ubuntu-24.04-arm
+          - name: Debian-10-buster-Minimal-Kernel-4.9
+            arch: aarch64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    name: ${{ matrix.name }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Environment
+        run: |
+          uname -m
+          docker version --format 'server {{.Server.Version}}'
+          df -h / | tail -1
+
+      - name: Build ${{ matrix.name }}
+        run: ./build.sh -a "${{ matrix.arch }}" -i "${{ matrix.name }}" -v "${{ needs.prepare.outputs.version }}" --no-load
+
+      - name: Show result
+        run: ls -lh out/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: out/*.tar.xz*
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    needs: [prepare, build]
+    if: always() && needs.prepare.result == 'success' && (needs.build.result == 'success' || needs.build.result == 'skipped')
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - uses: actions/download-artifact@v4
+        if: needs.build.result == 'success'
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Create release
+        if: needs.build.result == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.prepare.outputs.version }}
+        run: |
+          gh release create "$TAG" dist/*.tar.xz dist/*.sha256 \
+            --title "Droidspaces legacy-kernel rootfs $TAG" \
+            --notes "Debian rootfs for Droidspaces on legacy Android kernels (3.10-4.19, incl. 4.9).
+
+          | rootfs | systemd | glibc | source |
+          |---|---|---|---|
+          | Debian 12 (Bookworm) | 252 | 2.36 | deb.debian.org (maintained) |
+          | Debian 11 (Bullseye) | 247 | 2.31 | archive.debian.org (frozen) |
+          | Debian 10 (Buster) | 241 | 2.28 | archive.debian.org (frozen) |
+
+          Install on the phone: Droidspaces app -> Containers -> + -> Install from file,
+          then enable **Force Cgroup V1** for kernels older than 5.4."
+
+      - name: Regenerate rootfs.json
+        env:
+          TAG: ${{ needs.prepare.outputs.version }}
+          REPO: ${{ github.repository }}
+        run: |
+          mkdir -p dist
+          if [ -z "$(ls -A dist/*.tar.xz 2>/dev/null)" ]; then
+            echo "no fresh tarballs; reading the existing release instead"
+            gh release download "$TAG" --dir dist --pattern '*.tar.xz' --clobber
+          fi
+          python3 scripts/make-rootfs-json.py --dir dist \
+            --base-url "https://github.com/${REPO}/releases/download/${TAG}" \
+            -o rootfs.json
+          head -40 rootfs.json
+
+      - name: Commit rootfs.json
+        env:
+          TAG: ${{ needs.prepare.outputs.version }}
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add rootfs.json
+          if git diff --cached --quiet; then
+            echo "rootfs.json unchanged"
+          else
+            git commit -m "chore: rootfs.json for ${TAG}"
+            git push
+          fi

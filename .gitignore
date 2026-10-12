@@ -1,0 +1,12 @@
+# build output
+out/
+dist/
+*.tar.xz
+
+# local build state
+.docker/
+.ls-client/
+
+# python
+__pycache__/
+*.pyc
