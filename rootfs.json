@@ -1,0 +1,44 @@
+[
+  {
+    "author": "built locally from Droidspaces-rootfs-builder",
+    "name": "Debian 10 (Buster) - Minimal - Kernel 3.10-4.19",
+    "distro": "Debian",
+    "description": "Debian 10 rootfs for Droidspaces on legacy Android kernels (3.10-4.19, incl. 4.9). systemd 241, cgroup v1 native, Android paranoid-network groups and iptables-legacy preconfigured. Run with Force Cgroup V1 enabled. Frozen archive build (no security updates).",
+    "architecture": "aarch64",
+    "file": "Debian-10-buster-Minimal-Kernel-4.9",
+    "download_url": "https://github.com/Yang-XianChen/droidspaces-debian-legacy/releases/download/v20261012-1/Debian-10-buster-Minimal-Kernel-4.9-Droidspaces-rootfs-aarch64-20261012-v20261012-1.tar.xz",
+    "sha256": "637a2aa9ba28d82f049d31b13d82fde1301c8c4a6681452fceb95522475b9a23",
+    "size_bytes": 83163056,
+    "version": "v20261012-1",
+    "build_date": "20261012",
+    "kernel_compat": "3.10-4.19"
+  },
+  {
+    "author": "built locally from Droidspaces-rootfs-builder",
+    "name": "Debian 11 (Bullseye) - Minimal - Kernel 3.10-4.19",
+    "distro": "Debian",
+    "description": "Debian 11 rootfs for Droidspaces on legacy Android kernels (3.10-4.19, incl. 4.9). systemd 247, cgroup v1 friendly, Android paranoid-network groups and iptables-legacy preconfigured. Run with Force Cgroup V1 enabled.",
+    "architecture": "aarch64",
+    "file": "Debian-11-bullseye-Minimal-Kernel-4.9",
+    "download_url": "https://github.com/Yang-XianChen/droidspaces-debian-legacy/releases/download/v20261012-1/Debian-11-bullseye-Minimal-Kernel-4.9-Droidspaces-rootfs-aarch64-20261012-v20261012-1.tar.xz",
+    "sha256": "365a09a76098ed3e532da922dd4c2e507060a2b52b0b58eeae9fe905552909ad",
+    "size_bytes": 88996032,
+    "version": "v20261012-1",
+    "build_date": "20261012",
+    "kernel_compat": "3.10-4.19"
+  },
+  {
+    "author": "built locally from Droidspaces-rootfs-builder",
+    "name": "Debian 12 (Bookworm) - Minimal - Kernel 3.10-4.19",
+    "distro": "Debian",
+    "description": "Debian 12 rootfs for Droidspaces on legacy Android kernels (3.10-4.19, incl. 4.9). systemd 252, cgroup v1 friendly, Android paranoid-network groups and iptables-legacy preconfigured. Run with Force Cgroup V1 enabled.",
+    "architecture": "aarch64",
+    "file": "Debian-12-bookworm-Minimal-Kernel-4.9",
+    "download_url": "https://github.com/Yang-XianChen/droidspaces-debian-legacy/releases/download/v20261012-1/Debian-12-bookworm-Minimal-Kernel-4.9-Droidspaces-rootfs-aarch64-20261012-v20261012-1.tar.xz",
+    "sha256": "0d3b4d12e6833b3c943bb75e178ba5529eff8a60cba775c5ef48e1a5c3720210",
+    "size_bytes": 94399492,
+    "version": "v20261012-1",
+    "build_date": "20261012",
+    "kernel_compat": "3.10-4.19"
+  }
+]
