@@ -61,10 +61,12 @@ if [ -f /sys/fs/cgroup/cgroup.controllers ]; then
     CTRL=$(cat /sys/fs/cgroup/cgroup.controllers 2>/dev/null)
     echo "  模式    : cgroup v2 (unified)"
     echo "  控制器  : ${CTRL:-<empty>}"
+    V2_MISSING=""
     for c in cpu memory pids; do
         case " $CTRL " in
             *" $c "*) ok "controller '$c' 可用" ;;
-            *) warn "controller '$c' 不在 v2 根上（旧内核常见）" ;;
+            *) warn "controller '$c' 不在 v2 根上（4.9 内核常见：v2 是个空壳）"
+               V2_MISSING="$V2_MISSING $c" ;;
         esac
     done
 elif [ -d /sys/fs/cgroup/memory ] || [ -d /sys/fs/cgroup/cpu ]; then
@@ -83,6 +85,18 @@ if [ -r /proc/cgroups ]; then
 fi
 
 head_ "4. 容器配置 / container.config"
+# Which systemd is inside decides whether the cgroup mode matters at all:
+# 247 (Debian 11) and newer default to the unified cgroup v2 hierarchy, which a
+# 4.9 Android kernel cannot back with controllers; 241 (Debian 10) still
+# defaults to hybrid/v1 and does not care.
+SDVER=$(/lib/systemd/systemd --version 2>/dev/null | head -1 | awk '{print $2}' | tr -dc '0-9')
+if [ -n "$SDVER" ]; then
+    if [ "$SDVER" -ge 247 ] 2>/dev/null; then
+        echo "  systemd : $SDVER（>= 247：默认 unified cgroup v2，4.9 上需要 Force Cgroup V1）"
+    else
+        echo "  systemd : $SDVER（< 247：默认 hybrid cgroup v1，通常不需要强制）"
+    fi
+fi
 CONF=/run/droidspaces/container.config
 if [ -r "$CONF" ]; then
     while IFS= read -r line; do
@@ -99,8 +113,15 @@ if [ -r "$CONF" ]; then
                 if [ "${FORCEV1:-0}" = "1" ]; then
                     ok "旧内核 + 宿主 cgroup v2：已开启 Force Cgroup V1（正确）"
                 else
-                    bad "旧内核 + 宿主 cgroup v2，但 force_cgroupv1=0"
-                    add_advice "在容器配置里打开 Force Cgroup V1（CLI: --force-cgroupv1），否则 systemd 可能起不来/卡住"
+                    if [ -n "${V2_MISSING:-}" ]; then
+                        bad "旧内核 + 宿主 cgroup v2 缺控制器:${V2_MISSING}，且 force_cgroupv1=0"
+                        add_advice "★ 就是这里：systemd >= 247（Debian 11/12）默认用 unified cgroup v2，4.9 的 v2 没有控制器 → 它读错环境、服务起不来（典型现象：网络初始化失败、进程反复重启把 CPU 顶到 100%）。打开 Force Cgroup V1 后重开容器即可"
+                        add_advice "App: 容器 → 配置 → 打开「强制 Cgroup V1」；CLI: droidspaces ... --force-cgroupv1"
+                        add_advice "不想开这个开关就用 Debian 10 镜像：systemd 241 默认 hybrid cgroup，不需要强制"
+                    else
+                        warn "旧内核 + 宿主 cgroup v2，但 force_cgroupv1=0（v2 控制器看起来是齐的，可能没事）"
+                        add_advice "若 systemd 容器起不来/卡住，打开 Force Cgroup V1 再试"
+                    fi
                 fi
             else
                 ok "宿主已是 cgroup v1，无需 force_cgroupv1"

@@ -21,6 +21,34 @@
 > 参考：Droidspaces 官方 [Troubleshooting](https://github.com/ravindu644/Droidspaces-OSS/blob/main/Documentation/Troubleshooting.md#a-modern-distribution-will-not-boot-on-an-old-kernel)
 > 与 `Documentation/Kernel-Configuration.md` 的版本表（4.4–4.19 需要 systemd < 258）。
 
+> ⚠️ 注意：systemd < 258 只是「不会因为缺 syscall 回退而硬失败」，**cgroup 模式还要单独处理** —— 见下一节。
+
+---
+
+## 0.5 ★ 4.9 真机实测结论（小米 9 SE / grus，内核 4.9.337）
+
+| 包 | systemd | 4.9 上能不能直接跑 | 说明 |
+|---|---|---|---|
+| **Debian 10 Buster** | 241 | ✅ **可以** | systemd 241 默认 hybrid cgroup，不开开关也能起 |
+| Debian 11 Bullseye | 247 | ⚠️ **必须开「强制 Cgroup V1」** | 不开时实测：网络初始化失败 + CPU 被顶到 100% |
+| Debian 12 Bookworm | 252 | ⚠️ 同上 | 同上（systemd ≥ 247 都是这个行为） |
+
+**原因（已定位）**：systemd ≥ 247 **默认使用 unified cgroup v2**；而 4.9 的 cgroup v2 是个空壳 ——
+`/sys/fs/cgroup/cgroup.controllers` 里没有 `cpu` / `memory` / `pids`。systemd 因此误判运行环境，
+服务（尤其 `systemd-networkd`）起不来，反复重启的单元把 CPU 顶到 100%。systemd 241（Debian 10）
+默认还是 hybrid/v1，所以完全不受影响。这正是 Droidspaces 官方文档里 `--force-cgroupv1` 的适用场景
+（原文：*"For old Android kernels, 4.9 and earlier, whose cgroup v2 is missing the controllers
+systemd expects, which makes systemd misread the environment and fail to boot."*）
+
+**怎么处理**（二选一）：
+
+1. **继续用 Debian 11/12**：App → 容器 → **配置 → 打开「强制 Cgroup V1」**
+   （CLI：`droidspaces ... --force-cgroupv1`），然后重开容器。
+2. **换 Debian 10**：不用改任何开关，systemd 241 直接就能跑（代价是软件包更老、源已 EOL 冻结）。
+
+进去以后跑 `ds-legacy-check`：第 3 节会列出 cgroup v2 缺哪些控制器，第 4 节根据 systemd 版本直接
+告诉你要不要开这个开关、以及不开会出什么现象。
+
 ---
 
 ## 1. 目录内容
@@ -160,10 +188,11 @@ droidspaces check
 |---|---|---|---|
 | systemd | 252 | 247 | 241 |
 | glibc | 2.36 | 2.31 | 2.28 |
+| **4.9 实测** | ⚠️ 需开 Force Cgroup V1 | ⚠️ 需开 Force Cgroup V1 | ✅ **开箱可跑**（见 0.5 节） |
 | 内核支持 | 3.10 – 4.19（官方也把 12/13 列为老内核方案） | 同左，回退路径更多 | 同左，回退路径最多 |
 | 软件源 | `deb.debian.org` + `security` **正常维护** | EOL（2026-08-31）→ `archive.debian.org`，**冻结无更新** | EOL（2024-06-30）→ `archive.debian.org`，**冻结无更新** |
 | 体积 | 90 MB | 85 MB | 80 MB |
-| 什么时候选 | 想要还能收到安全更新 | 内核 4.x，想尽量远离 systemd 258 那条线 | 内核特别老（3.10–4.4），或要最保守的用户态 |
+| 什么时候选 | 想要还能收到安全更新 | 内核 4.x，想尽量远离 systemd 258 那条线 | 想要最少配置、或（4.9 上）不想动 cgroup 开关 |
 
 > 注意：Bullseye / Buster 都已 EOL。实测 `deb.debian.org/debian-security` 上 bullseye 的
 > `Packages` 索引还在，但 **`.deb` 全部 404**（构建时报错），所以这两个镜像都改成走
@@ -178,7 +207,8 @@ droidspaces check
 
 | 症状 | 原因 / 处理 |
 |---|---|
-| 启动就卡住、`systemd` 反复超时 | **没开「强制 Cgroup V1」**。App：容器配置 → 打开；CLI：`droidspaces ... --force-cgroupv1` |
+| **网络起不来 + CPU 100%**（Debian 11/12） | **没开「强制 Cgroup V1」**：systemd ≥247 默认 unified cgroup v2，4.9 的 v2 没控制器 → 服务起不来、反复重启。App：容器配置 → 打开；CLI：`--force-cgroupv1`。想免配置就用 Debian 10 |
+| 启动就卡住、`systemd` 反复超时 | 同上，优先怀疑 cgroup 模式 |
 | 连 `ping` 都 `socket: permission denied` | 内核 paranoid networking；本包已加 aid_inet 组，若你自定义了用户：`usermod -a -G aid_inet,aid_net_raw <user>` |
 | IP 通、域名不通 | 运营商封公共 DNS：App 里改容器 **DNS Servers** 为运营商下发的 DNS；或 `droidspaces ... --dns=<ip>` |
 | gateway / macvlan 模式下域名不通 | Debian 11 镜像靠内置租约发布器；若仍不行直接指定 `--dns=<网关IP>`；Debian 12 有 systemd-resolved，正常 |
