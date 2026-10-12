@@ -27,51 +27,83 @@
 
 ```
 droidspaces-debian-legacy/
-├── build.sh                      # 构建：docker buildx + qemu 跨架构，产出 out/*.tar.xz
+├── build.sh                      # 构建：docker buildx，产出 out/*.tar.xz
 ├── verify.sh                     # 校验：归档 / 内容 / 运行时 / 4.9 系统调用面 / 启动
 ├── README.md                     # 本文件
-├── rootfs.json                   # 可选：给 App「管理软件源」用的订阅文件（自己填 URL）
+├── rootfs.json                   # 由 CI 生成：App「管理软件源」订阅用
+├── .github/workflows/
+│   └── build-rootfs.yml          # ★ GitHub Actions：arm64 原生 runner 构建 + 发 release
 ├── templates/aarch64/
-│   ├── Debian-12-bookworm-Minimal-Kernel-4.9.Dockerfile   # 推荐
-│   └── Debian-11-bullseye-Minimal-Kernel-4.9.Dockerfile   # 最保守（已 EOL）
+│   ├── Debian-12-bookworm-Minimal-Kernel-4.9.Dockerfile
+│   ├── Debian-11-bullseye-Minimal-Kernel-4.9.Dockerfile   # 老内核首选
+│   └── Debian-10-buster-Minimal-Kernel-4.9.Dockerfile     # 更老（已冻结）
 ├── scripts/
 │   ├── legacy-fixes.sh           # ★ 兼容层：所有 Android/老内核修补都在这里
 │   ├── ds-legacy-check.sh        # ★ 装进镜像，手机里跑 `ds-legacy-check` 出体检报告
 │   ├── seccomp-4.9.json          # 用 seccomp 屏蔽 4.9 之后的系统调用，用于本地验证
-│   ├── make-rootfs-json.py       # 由 out/*.tar.xz 生成 rootfs.json 订阅源
+│   ├── make-rootfs-json.py       # 由 *.tar.xz 生成 rootfs.json 订阅源
+│   ├── localsend-send.py         # 可选的 LocalSend v2 客户端（把包直接推到手机）
 │   ├── bashrc.sh                 # 来自官方 builder 的别名脚本
 │   └── download-firmware         # 来自官方 builder 的固件下载器
-└── out/                          # 构建产物 + sha256
+└── out/                          # 本地构建产物 + sha256（不入库）
 ```
+
+> **基础镜像就是官方精简 docker 镜像**：`FROM debian:bookworm / bullseye / buster`
+> （压缩后 52 / 56 / 50 MB），不是 ISO、也不是从源码装的。构建只做了两件事：
+> ① 装「能引导 + 能联网」必需的东西（systemd-sysv、udev、dbus、iproute2…）；
+> ② 跑 `scripts/legacy-fixes.sh` 打上 Android / 老内核补丁。
+> **原始 docker 镜像不能直接当容器包**：里面没有 init（没有 `/sbin/init`，
+> Droidspaces 要求 rootfs 里有 init 才能当 PID 1），也没有 aid_inet 组、
+> iptables-legacy、journald 4.9 死锁屏蔽、cgroup 记账关闭这些补丁 ——
+> 直接导出的镜像在手机上要么起不来，要么起来了没网。
 
 ---
 
-## 2. 手机安装（App，推荐）
+## 2. 手机安装
 
-1. **把 `.tar.xz` 拷到手机**（USB/MTP、`adb push`、网盘都行），放 `Download/` 目录。
-   ```sh
-   adb push out/Debian-12-bookworm-Minimal-Kernel-4.9-*.tar.xz /sdcard/Download/
-   ```
-2. 打开 **Droidspaces App → Containers → ＋ → Install from file**，选中这个 `.tar.xz`。
-   （App 内置校验脚本会检查归档里有 `bin/ sbin/ etc/ usr/`，本包满足。）
-3. 向导四步：
+### 方式 A：从 GitHub 仓库直接下载（推荐）
 
-   | 步骤 | 怎么选 | 为什么 |
-   |---|---|---|
-   | 名称 / hostname | 随意，例如 `debian` | — |
-   | **配置** | **打开「强制 Cgroup V1」**；网络选 **NAT** | 4.9 的 cgroup v2 缺 systemd 需要的控制器，不强制 v1 时 systemd 可能误判环境、卡在启动 |
-   | 存储 | **保持「使用稀疏镜像」开启** | `/data` 是 f2fs + SELinux，目录型 rootfs 会随机损坏；镜像内 ext4 才是 OverlayFS 接受的 lowerdir |
-   | 摘要 | 确认 → 安装 | 解压约 1–3 分钟 |
+CI 每构建一次就发一个 release，并更新 `rootfs.json`：
 
-4. 回列表点 **Start**，看日志跑到 `RUNNING`；进 **Terminal** 就是 root shell。
-5. 第一次进去先跑一次体检：
+```
+仓库      https://github.com/Yang-XianChen/droidspaces-debian-legacy
+订阅源    https://raw.githubusercontent.com/Yang-XianChen/droidspaces-debian-legacy/main/rootfs.json
+Release   https://github.com/Yang-XianChen/droidspaces-debian-legacy/releases/latest
+```
 
-   ```sh
-   ds-legacy-check
-   ```
+手机上二选一：
 
-   它会逐项报告：命名空间、cgroup 模式、`force_cgroupv1` 是否已开、aid_inet 组、
-   iptables 后端、4.9 缺失的系统调用、DNS、存储。有任何一项要处理，它会给出具体命令。
+- **订阅软件源**：Droidspaces App → Containers → `+` → **管理软件源 / Manage Repositories**
+  → 添加上面的「订阅源」URL → 回到列表选 Debian 10/11/12 → **Download** → **Install**。
+- **手动装**：手机浏览器打开 Release 页，下载 `.tar.xz`，再
+  App → Containers → `+` → **Install from file** 选中它。
+
+### 方式 B：本地文件推过去
+
+```sh
+# LocalSend（同一个 Wi-Fi，手机上打开 LocalSend，允许接收）
+python3 scripts/localsend-send.py send --to 9se out/Debian-11-*.tar.xz
+# 或者 adb
+adb push out/Debian-11-*.tar.xz /sdcard/Download/
+```
+
+### 安装向导怎么选（重要）
+
+| 步骤 | 怎么选 | 为什么 |
+|---|---|---|
+| 名称 / hostname | 随意，例如 `debian` | — |
+| **配置** | **打开「强制 Cgroup V1」**；网络选 **NAT** | 4.9 的 cgroup v2 缺 systemd 需要的控制器，不强制 v1 时 systemd 可能误判环境、卡在启动 |
+| 存储 | **保持「使用稀疏镜像」开启** | `/data` 是 f2fs + SELinux，目录型 rootfs 会随机损坏；镜像内 ext4 才是 OverlayFS 接受的 lowerdir |
+| 摘要 | 确认 → 安装 | 解压约 1–3 分钟 |
+
+启动后进 **Terminal**，先跑一次体检：
+
+```sh
+ds-legacy-check
+```
+
+它会逐项报告：命名空间、cgroup 模式、`force_cgroupv1` 是否已开、aid_inet 组、
+iptables 后端、4.9 缺失的系统调用、DNS、存储。有任何一项要处理，它会给出具体命令。
 
 ### CLI 等价（Termux root shell）
 
@@ -124,17 +156,21 @@ droidspaces check
 
 ## 4. 选哪个版本
 
-| | **Debian 12 bookworm**（推荐） | Debian 11 bullseye |
-|---|---|---|
-| systemd | 252 | 247 |
-| glibc | 2.36 | 2.31 |
-| 内核支持 | 3.10 – 4.19 实测路线，官方也把 Debian 12/13 列为老内核方案 | 同左，回退路径更多 |
-| 软件源 | `deb.debian.org` + `security` 正常 | **已 EOL（2026-08-31）**，只能走 `archive.debian.org`，**永久冻结、无安全更新** |
-| 什么时候选 | 默认选它，手机是要联网用的 | 内核特别老（3.10–4.4）、或需要 systemd 247 / glibc 2.31 的特定软件 |
+| | Debian 12 bookworm | **Debian 11 bullseye**（老内核首选） | Debian 10 buster |
+|---|---|---|---|
+| systemd | 252 | 247 | 241 |
+| glibc | 2.36 | 2.31 | 2.28 |
+| 内核支持 | 3.10 – 4.19（官方也把 12/13 列为老内核方案） | 同左，回退路径更多 | 同左，回退路径最多 |
+| 软件源 | `deb.debian.org` + `security` **正常维护** | EOL（2026-08-31）→ `archive.debian.org`，**冻结无更新** | EOL（2024-06-30）→ `archive.debian.org`，**冻结无更新** |
+| 体积 | 90 MB | 85 MB | 80 MB |
+| 什么时候选 | 想要还能收到安全更新 | 内核 4.x，想尽量远离 systemd 258 那条线 | 内核特别老（3.10–4.4），或要最保守的用户态 |
 
-> Bullseye 的 EOL 是客观事实：`deb.debian.org/debian-security` 上 bullseye 的
-> `Packages` 索引还在，但 **`.deb` 全部 404**（构建时实测），所以镜像必须指到
-> `archive.debian.org`。装到手机上以后也不会再有任何安全更新 —— 想长期用就选 bookworm。
+> 注意：Bullseye / Buster 都已 EOL。实测 `deb.debian.org/debian-security` 上 bullseye 的
+> `Packages` 索引还在，但 **`.deb` 全部 404**（构建时报错），所以这两个镜像都改成走
+> `archive.debian.org`，装到手机上以后**不会再有安全更新** —— 要长期联网用就选 bookworm。
+> 如果是「起不来」的问题，Bullseye（systemd 247）已经比 Bookworm 保守一大截；
+> 还想更老就自己加 `templates/aarch64/Debian-9-stretch-...Dockerfile`（systemd 232，
+> 脚本里的兼容层已经按 systemd 232 处理 `ExecCondition` 的缺失）。
 
 ---
 
@@ -153,52 +189,130 @@ droidspaces check
 
 ---
 
-## 6. 重新构建 / 校验
+## 6. 构建 / 校验
 
-### 构建
+### 方式 A：GitHub Actions（推荐，快得多）
+
+仓库里带了 `.github/workflows/build-rootfs.yml`：push 到 `main`（改到 `templates/`、
+`scripts/`、`build.sh`、workflow 时）或手动 **Run workflow** 就会触发。三个 Debian
+版本并行跑在 **GitHub 原生 arm64 runner（`ubuntu-24.04-arm`）** 上 —— 没有 QEMU
+模拟、网络也是满速，单个包 2 分钟左右（本机 x86 + QEMU 要 10–20 分钟）。
+
+流程：矩阵构建 → 上传 artifact → 汇总发一个 release（`v<日期>-<run号>`）→
+用 `scripts/make-rootfs-json.py` 重新生成 `rootfs.json` 并提交回 main。
 
 ```sh
-cd droidspaces-debian-legacy
+gh workflow run build-rootfs.yml            # 手动触发
+gh run watch                                # 看进度
+gh release list                             # 看产物
+```
+
+> fork 到自己账号后：Settings → Actions → General → Workflow permissions 选
+> **Read and write permissions**（workflow 里已经声明 `contents: write`，
+> 但 fork 出来的仓库默认可能是只读）。
+
+### 方式 B：本机构建（x86 交叉 / arm64 原生都行）
+
+```sh
 ./build.sh --list                                          # 看有哪些模板
 ./build.sh                                                 # 全部（aarch64）
-./build.sh -i Debian-12-bookworm-Minimal-Kernel-4.9        # 只构建一个
+./build.sh -i Debian-11-bullseye-Minimal-Kernel-4.9        # 只构建一个
+./build.sh --no-load -i Debian-10-buster-Minimal-Kernel-4.9
 ./build.sh -a armhf                                        # 32 位设备（需自己加 templates/armhf/）
 DS_BASE_IMAGE=docker.m.daocloud.io/library/debian:bookworm ./build.sh   # 换基础镜像/镜像站
 ```
 
-脚本会：自动注册 qemu binfmt（宿主跑不动 arm64 时）→ 建 buildx builder →
+脚本会：需要时注册 qemu binfmt（x86 宿主跑 arm64）→ 建 buildx builder →
 `--target export --output type=tar` 导出纯 rootfs → `xz -9` 压缩 → 生成 `.sha256` →
-顺带 `--load` 一个同名 docker 镜像供 `verify.sh` 直接运行。
+（默认）`--load` 一个同名 docker 镜像供 `verify.sh` 直接运行。
 
 ### 校验
 
 ```sh
-./verify.sh out/Debian-12-bookworm-Minimal-Kernel-4.9-*.tar.xz              # 静态检查
-./verify.sh out/...tar.xz --legacy-syscalls                                  # 再跑一遍「4.9 系统调用面」冒烟测试
-./verify.sh out/...tar.xz --legacy-syscalls --boot                           # 再尝试把 systemd 启到 multi-user
+./verify.sh out/Debian-11-bullseye-Minimal-Kernel-4.9-*.tar.xz             # 静态检查
+./verify.sh out/...tar.xz --legacy-syscalls                                 # +「4.9 系统调用面」冒烟测试
+./verify.sh out/...tar.xz --legacy-syscalls --boot                          # + 尝试把 systemd 启到 multi-user
 ```
 
-`--legacy-syscalls` 会用 `scripts/seccomp-4.9.json` 把 `clone3 / openat2 / statx /
-faccessat2 / pidfd_* / io_uring_* …` 这些 **4.9 不存在的系统调用**强制返回 `ENOSYS`，
-再跑 `bash / dpkg / git / ssh / systemctl --version` 等，用近似「4.9 系统调用面」验证 glibc 与
-基础用户态的回退路径确实存在。（宿主是 6.12 内核，这是仿真，不是真 4.9。）
+`--legacy-syscalls` 用 `scripts/seccomp-4.9.json` 把 `clone3 / openat2 / faccessat2 /
+pidfd_* / io_uring_* / close_range …` 这些 **4.9 不存在的系统调用**强制返回 `ENOSYS`，
+再跑 `bash / dpkg / git / ssh / systemctl --version / ds-legacy-check`，验证 glibc 与
+基础用户态的回退路径确实存在。（宿主是 6.12 内核，这是仿真，不是真 4.9；
+`statx`/`fsmount` 那几个没法屏蔽，因为容器运行时 runc 自己要用。）
 
-### 发布成订阅源（可选）
-
-App 还支持订阅 `rootfs.json`（Containers → Manage Repositories）：
+### 生成订阅源
 
 ```sh
-./scripts/make-rootfs-json.py --base-url https://你的地址/ds -o rootfs.json
-# 把 out/*.tar.xz 和 rootfs.json 上传到该地址，App 里填 https://你的地址/ds/rootfs.json
+python3 scripts/make-rootfs-json.py --dir dist \
+  --base-url https://github.com/<owner>/<repo>/releases/download/<tag> -o rootfs.json
 ```
 
-注意 App 只接受 `https://` 的订阅地址；只想装一个包的话，直接用「从文件安装」更省事。
+App 只接受 `https://` 的订阅地址；只想装一个包就直接「从文件安装」。
 
 ---
 
 ## 7. 构建与验证结果
 
-<!--RESULTS-->
+### 7.1 CI 产物（GitHub Actions，release `v20261012-1`）
+
+三个包全部在 **原生 arm64 runner** 上构建成功，整条流水线（3 个并行构建 + 发 release +
+提交 `rootfs.json`）约 **2 分钟**，比本机 x86 + QEMU 快一个数量级。
+
+| 包 | systemd | glibc | tar.xz | sha256 |
+|---|---|---|---|---|
+| Debian 10 (Buster) - Minimal | 241 | 2.28 | 83,163,056 B (80 MB) | `637a2aa9ba28d82f…` |
+| Debian 11 (Bullseye) - Minimal | 247 | 2.31 | 88,996,032 B (85 MB) | `365a09a76098ed3e…` |
+| Debian 12 (Bookworm) - Minimal | 252 | 2.36 | 94,399,492 B (90 MB) | `0d3b4d12e6833b3c…` |
+
+完整 sha256、下载地址见 `rootfs.json`（也是 App 的订阅源）：
+
+```
+https://raw.githubusercontent.com/Yang-XianChen/droidspaces-debian-legacy/main/rootfs.json
+```
+
+### 7.2 逐项校验（`verify.sh`）
+
+| 检查项 | 结果 |
+|---|---|
+| xz 流完整性 + sha256 | ✅ 三个包全部匹配 |
+| App 安装校验（顶层 `bin/ sbin/ etc/ usr/`） | ✅ 三个包全部通过 |
+| `/etc/droidspaces` 标记、aid_inet(3003)/aid_net_raw(3004)、`_apt`、iptables→legacy、journald-audit 屏蔽、netmode drop-in、`ds-legacy-check` | ✅ 全部存在 |
+| Debian 10 → `ExecStartPre` 回落（systemd 241 没有 `ExecCondition`） | ✅ 生成的 drop-in 已自动切换写法 |
+| Debian 11/12 → `ExecCondition` | ✅ |
+| `verify.sh` 静态检查 | ✅ PASS=25 FAIL=0（三个包都是） |
+
+### 7.3 「4.9 系统调用面」冒烟测试
+
+用 `scripts/seccomp-4.9.json` 把 `clone3 / openat2 / faccessat2 / pidfd_* / io_uring_* /
+close_range / rseq …` 全部强制 `ENOSYS` 后，在 Debian 12 包里跑：
+
+```
+uname   : aarch64
+debian  : 12.15
+systemd : systemd 252 (252.39-1~deb12u2)
+glibc   : ldd (Debian GLIBC 2.36-9+deb12u14) 2.36
+root groups: root tty video input aid_inet aid_net_raw
+aid_inet : aid_inet:x:3003:root
+iptables : /usr/sbin/xtables-legacy-multi
+dpkg audit:            (无输出 = 无损坏包)
+bash    : GNU bash, version 5.2.15(1)-release
+git     : git version 2.39.5
+ssh     : OpenSSH_9.2p1 Debian-2+deb12u10
+perl    : ok
+ds-legacy-check: ran (exit 0)
+```
+
+即 glibc / dpkg / apt / bash / git / ssh / perl / systemd 的用户态部分在「没有
+4.9 之后那些系统调用」的环境里都能正常回退。**注意这是仿真**：`statx`、`fsmount`、
+`fsconfig`、`move_mount`、`open_tree` 没法屏蔽（容器运行时 runc 自己要用它们），
+真机验证还是得在手机上启动容器。
+
+### 7.4 手机上要做的两件事
+
+1. 配置里打开 **强制 Cgroup V1**（4.9 的 cgroup v2 控制器不全，systemd 会误判环境）。
+2. 存储保持 **使用稀疏镜像**（f2fs + SELinux 下目录型 rootfs 会坏）。
+
+进去以后跑 `ds-legacy-check` 复核，详见第 2、5 节。
 
 ---
 

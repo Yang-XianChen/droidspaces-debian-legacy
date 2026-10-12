@@ -85,7 +85,7 @@ for d in bin sbin etc usr; do
     else bad "顶层 $d 缺失（App 会拒绝安装）"; fi
 done
 
-for p in etc/debian_version etc/passwd etc/group usr/bin/sh etc/droidspaces \
+for p in etc/debian_version etc/passwd etc/group etc/droidspaces \
          etc/systemd/network/10-eth-dhcp.network \
          etc/systemd/system.conf.d/10-droidspaces-legacy.conf \
          etc/systemd/system/systemd-journald-audit.socket \
@@ -94,6 +94,14 @@ for p in etc/debian_version etc/passwd etc/group usr/bin/sh etc/droidspaces \
     if grep -qxF "$p" "$LISTFILE"; then ok "$p"
     else bad "缺少 $p"; fi
 done
+
+# /bin/sh is a real file on a non-usrmerged distro (Debian 10/11) and a symlink
+# target under usr/bin on a merged one (Debian 12+).
+if grep -qxF "bin/sh" "$LISTFILE" || grep -qxF "usr/bin/sh" "$LISTFILE"; then
+    ok "/bin/sh（或 usr/bin/sh）存在"
+else
+    bad "缺少 /bin/sh"
+fi
 
 if grep -qE '(^|/)(usr/)?lib/systemd/systemd$' "$LISTFILE"; then
     ok "systemd 二进制存在"
@@ -118,10 +126,14 @@ RV=$(cat "$ROOT/etc/debian_version" 2>/dev/null)
 
 SYSV=$(awk '/^Package: systemd$/{p=1} p&&/^Version:/{print $2; exit}' "$ROOT/var/lib/dpkg/status" 2>/dev/null)
 echo "  systemd : ${SYSV:-unknown}"
-case "$SYSV" in
-    247*|248*|249*|250*|251*|252*|25[3-7]*) ok "systemd < 258（4.x 内核可用）" ;;
-    "") warn "无法从 dpkg status 读取 systemd 版本" ;;
-    *) bad "systemd $SYSV 可能不支持 < 5.4 内核（258+ 移除了回退路径）" ;;
+SYSMAJOR=$(printf '%s' "$SYSV" | sed 's/^\([0-9]*\).*/\1/')
+case "$SYSMAJOR" in
+    ""|*[!0-9]*) warn "无法解析 systemd 版本: ${SYSV:-unknown}" ;;
+    *) if [ "$SYSMAJOR" -lt 258 ]; then
+           ok "systemd $SYSMAJOR < 258（4.x 内核可用）"
+       else
+           bad "systemd $SYSMAJOR >= 258，不支持 < 5.4 内核（回退路径已移除）"
+       fi ;;
 esac
 LIBV=$(awk '/^Package: libc6$/{p=1} p&&/^Version:/{print $2; exit}' "$ROOT/var/lib/dpkg/status" 2>/dev/null)
 echo "  glibc   : ${LIBV:-unknown}"
